@@ -8,9 +8,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     && locale-gen ko_KR.UTF-8 && update-locale LANG=ko_KR.UTF-8
 
 RUN useradd -m -s /bin/bash jungle && usermod -aG sudo jungle
-
+RUN echo "jungle ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/jungle
 # 암호 설정
-RUN echo 'jungle:jungle' | chpasswd
+# RUN echo 'jungle:jungle' | chpasswd
 
 USER jungle
 WORKDIR /home/jungle

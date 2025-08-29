@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "socket.h": "c",
+        "stdio.h": "c",
+        "unistd.h": "c",
+        "string.h": "c",
+        "netdb.h": "c",
+        "limits": "c",
+        "file.h": "c",
+        "cstdlib": "c",
+        "stat.h": "c",
+        "err.h": "c"
+    }
+}

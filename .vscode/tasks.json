@@ -2,6 +2,25 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "echo build",
+            "type": "shell",
+            "command": "cd ${workspaceFolder}/webproxy-lab/echo && make",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/webproxy-lab/echo"
+            }
+        },
+        {
             "label": "Tiny server build",
             "type": "shell",
             "command": "cd ${workspaceFolder}/webproxy-lab/tiny && make",

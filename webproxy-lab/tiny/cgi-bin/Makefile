@@ -1,7 +1,9 @@
 CC = gcc
-CFLAGS = -O2 -Wall -I ..
+CFLAGS = -O2 -Wall -I ../
 
-all: adder
+CGIS = adder
+
+all: $(CGIS)
 
 adder: adder.c
 	$(CC) $(CFLAGS) -o adder adder.c

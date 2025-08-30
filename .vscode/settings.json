@@ -9,6 +9,7 @@
         "file.h": "c",
         "cstdlib": "c",
         "stat.h": "c",
-        "err.h": "c"
+        "err.h": "c",
+        "csapp.h": "c"
     }
 }

@@ -16,15 +16,189 @@ void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
+void response_hdrs(int fd, char *mime_type, int content_len);
+
+void get_filetype(char *filename, char *filetype)
+{
+  if (strstr(filename, ".html"))
+  {
+    strcpy(filetype, "text/html");
+  }
+  else if (strstr(filename, ".gif"))
+  {
+    strcpy(filetype, "image/gif");
+  }
+  else if (strstr(filename, ".png"))
+  {
+    strcpy(filetype, "image/png");
+  }
+  else if (strstr(filename, ".jpg"))
+  {
+    strcpy(filetype, "image/jpeg");
+  }
+}
+
+void response_line(int fd, char *version, char *status_code, char *short_msg)
+{
+  char buf[MAXBUF];
+  sprintf(buf, "%s %s %s\r\n", version, status_code, short_msg);
+  rio_writen(fd, buf, strlen(buf));
+}
+
+void response_success_line(int fd)
+{
+  response_line(fd, "http/1.0", "200", "OK");
+}
+
+void serve_dynamic(int fd, char *filename, char *cgiargs)
+{
+  // response line
+  response_success_line(fd);
+
+  int pid;
+  if ((pid = fork()) == 0)
+  {
+    // only child;
+    // raise(SIGSTOP);
+    char *empty_list[] = {filename, NULL};
+    setenv("QUERY_STRING", cgiargs, 1);
+    dup2(fd, STDOUT_FILENO);
+    if (execve(filename, empty_list, environ) < 0)
+    {
+      perror("runtime error execve");
+    }
+  }
+  waitpid(pid, NULL, WUNTRACED);
+}
+
+void serve_static(int fd, char *filename, int filesize)
+{
+  // file open - syscall
+  int srcfd = open(filename, O_RDONLY, 0);
+
+  // file read OR mmap
+  void *srcp = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  close(srcfd);
+
+  // 응답라인, 헤더 응답하기
+  response_success_line(fd);
+  char filetype[MAXLINE];
+  get_filetype(filename, filetype);
+  response_hdrs(fd, filetype, filesize);
+
+  // fd에 파일 내용 쓰기
+  rio_writen(fd, srcp, filesize);
+}
+
+static void append_snprintf(char *str, size_t maxlen, const char *fmt, ...)
+{
+  size_t len = strlen(str);
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(str + len, maxlen, fmt, ap); // append
+  // sprintf처럼 str에 fmt를 쓴다. -> 가변인자 활용
+  va_end(ap);
+}
+
+typedef struct _header
+{
+  char *title;
+  char *content;
+  struct _header *next_hdr;
+} Header;
+
+static void init_hdrs(Header *hdrs, char *title, char *content)
+{
+  hdrs->title = title;
+  hdrs->content = content;
+  hdrs->next_hdr = NULL;
+}
+
+static void append_hdrs(Header *hdrs, char *title, char *content)
+{
+  Header *cur_hdr = hdrs;
+  while (cur_hdr->next_hdr != NULL)
+  {
+    cur_hdr = hdrs->next_hdr;
+  }
+  init_hdrs(hdrs, title, content);
+}
+
+static void make_hdrs(Header *hdrs, char *buf)
+{
+  Header *cur_hdr = hdrs;
+  while (cur_hdr != NULL)
+  {
+    append_snprintf(buf, MAXLINE, "%s: %s\r\n", cur_hdr->title, cur_hdr->content);
+    cur_hdr = hdrs->next_hdr;
+  }
+  append_snprintf(buf, MAXLINE, "\r\n"); // last of headers
+}
+
+void itos(int n, char *buf)
+{
+  snprintf(buf, MAXLINE, "%d", n);
+}
+
+void response_hdrs(int fd, char *mime_type, int content_len)
+{
+  Header hdrs = {NULL, NULL, NULL};
+  append_hdrs(&hdrs, "Content-Type", mime_type);
+  char buf[MAXLINE] = "";
+  itos(content_len, buf);
+  append_hdrs(&hdrs, "Content-Length", buf);
+  append_hdrs(&hdrs, "Connection", "close");
+
+  char hdrs_buf[MAXLINE] = "";
+  make_hdrs(&hdrs, hdrs_buf);
+  rio_writen(fd, hdrs_buf, strlen(hdrs_buf));
+}
+
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg)
+{
+  char buf[MAXLINE] = "", body[MAXBUF] = "";
+  append_snprintf(body, MAXBUF, "<html><head><title>Tiny Error</title></head>\r\n");
+  append_snprintf(body, MAXBUF, "<body bgcolor=\"ffffff\">\r\n");
+  append_snprintf(body, MAXBUF, "<p>%s:%s</p>\r\n", errnum, shortmsg);
+  append_snprintf(body, MAXBUF, "<p>%s: %s</p>\r\n", longmsg, cause);
+  append_snprintf(body, MAXBUF, "<hr><em>The Tiny Web server</em></body></html>\r\n", longmsg, cause);
+
+  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg); // version status_code status_msg
+  rio_writen(fd, buf, strlen(buf));                     // response line
+  response_hdrs(fd, "text/html", (int)strlen(body));    // response headers
+  rio_writen(fd, body, strlen(body));                   // response body (content)
+}
+
+// uri 기반, filename, cgiargs셋 / static 여부 반환
+int parse_uri(char *uri, char *filename, char *cgi_args)
+{
+  strcpy(cgi_args, "");
+
+  char *query_ptr;
+  if ((query_ptr = index(uri, '?')) > 0)
+  {
+    strcpy(cgi_args, query_ptr + 1);
+    *query_ptr = '\0';
+  }
+  strcpy(filename, ".");
+  strcat(filename, uri);
+
+  if (strlen(uri) == 1 && *(uri) == '/')
+  {
+    strcpy(filename, "./home.html");
+  }
+  return !strstr(uri, "cgi-bin");
+}
 
 void read_requesthdrs(rio_t *rp)
 {
   char buf[MAXLINE];
 
+  rio_readlineb(rp, buf, MAXLINE);
   while (strcmp(buf, "\r\n"))
   {
-    rio_readlineb(rp, buf, MAXLINE);
     printf("headers: %s", buf);
+    rio_readlineb(rp, buf, MAXLINE);
   }
 
   return;
@@ -36,21 +210,57 @@ void doit(int fd)
   char buf[MAXLINE];
   rio_t rio;
 
-  // int n;
   rio_readinitb(&rio, fd);
   rio_readlineb(&rio, buf, MAXLINE);
   printf("Request headers:\n");
   printf("%s", buf);
 
-  char method[10], url[MAXLINE], version[10];
-  sscanf(buf, "%s %s %s\n", method, url, version);
-  printf("%s %s %s\n", method, url, version);
-  if (!method || strcasecmp(method, "GET")) // get, GET
+  char method[10] = "", uri[MAXLINE] = "", version[10] = "";
+  sscanf(buf, "%s %s %s\n", method, uri, version);
+  if (strcasecmp(method, "GET")) // case cmp 대소문자 무시 비교
   {
-    fprintf(stderr, "GET method allow: [%s]\n", method);
+    clienterror(fd, "method", "501", "Not implemented", "Tiny does not implement this method");
+    fprintf(stderr, "Method not allow [Only GET]: [%s]\n", method);
     return;
   }
-  read_requesthdrs(&rio);
+
+  read_requesthdrs(&rio); // 빈 라인까지 헤더 읽으나, 내용은 무시 (tiny)
+
+  char filename[MAXLINE], cgi_args[MAXLINE];
+  int is_static = parse_uri(uri, filename, cgi_args); // url이 cgi를 요청하는지 아닌지
+
+  struct stat sbuf;
+  if (stat(filename, &sbuf) < 0)
+  {
+    clienterror(fd, filename, "404", "Not Found", "invalid path");
+    // fprintf(stderr, "404: recource\n");
+    return;
+  }
+
+  if (is_static)
+  {
+    // file check
+    if (!S_ISREG(sbuf.st_mode) || !(sbuf.st_mode & S_IRUSR))
+    {
+      clienterror(fd, filename, "403", "Forbidden Error", "couldn't read the file");
+      // fprintf(stderr, "forbidden\n");
+      return;
+    }
+
+    serve_static(fd, filename, sbuf.st_size);
+  }
+  else
+  {
+    if (!S_ISREG(sbuf.st_mode) || !(sbuf.st_mode & S_IXUSR))
+    {
+      clienterror(fd, filename, "403", "Forbidden Error", "couldn't run the cgi");
+      // fprintf(stderr, "forbidden\n");
+      return;
+    }
+
+    // dyan
+    serve_dynamic(fd, filename, cgi_args);
+  }
 }
 
 int main(int argc, char **argv)
@@ -77,6 +287,7 @@ int main(int argc, char **argv)
     fprintf(stdout, "Wating client...\n");
 
     socklen_t clientaddr_len;
+
     connfd = accept(listenfd, (SA *)&client_addr, &clientaddr_len);
     getnameinfo((SA *)&client_addr, clientaddr_len, host, MAXLINE, serv, MAXLINE, 0);
     fprintf(stdout, "Connected (%s : %s)\n", host, serv);

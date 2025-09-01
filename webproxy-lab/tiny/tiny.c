@@ -65,10 +65,18 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
     dup2(fd, STDOUT_FILENO);
     if (execve(filename, empty_list, environ) < 0)
     {
-      perror("runtime error execve");
+      perror("error execve");
     }
   }
-  waitpid(pid, NULL, WUNTRACED);
+
+  int status;
+  waitpid(pid, &status, 0);
+
+  if (WIFEXITED(status))
+  {
+    int code = WEXITSTATUS(status);
+    fprintf(stderr, "error code: %d\n", code);
+  }
 }
 
 void serve_static(int fd, char *filename, int filesize)
@@ -144,9 +152,9 @@ void response_hdrs(int fd, char *mime_type, int content_len)
 {
   Header hdrs = {NULL, NULL, NULL};
   append_hdrs(&hdrs, "Content-Type", mime_type);
-  char buf[MAXLINE] = "";
-  itos(content_len, buf);
-  append_hdrs(&hdrs, "Content-Length", buf);
+  char s[MAXLINE] = "";
+  itos(content_len, s);
+  append_hdrs(&hdrs, "Content-Length", s);
   append_hdrs(&hdrs, "Connection", "close");
 
   char hdrs_buf[MAXLINE] = "";
@@ -175,7 +183,7 @@ int parse_uri(char *uri, char *filename, char *cgi_args)
   strcpy(cgi_args, "");
 
   char *query_ptr;
-  if ((query_ptr = index(uri, '?')) > 0)
+  if ((query_ptr = strchr(uri, '?')))
   {
     strcpy(cgi_args, query_ptr + 1);
     *query_ptr = '\0';

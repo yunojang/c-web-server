@@ -10,7 +10,6 @@ int main(void)
   char arg1[MAXLINE], arg2[MAXLINE], content[MAXLINE];
   int n1 = 0, n2 = 0;
 
-  /* Extract the two arguments */
   if ((buf = getenv("QUERY_STRING")) == NULL)
   {
     return -1;
@@ -18,7 +17,12 @@ int main(void)
 
   sprintf(content, "QUERY_STRING=%s\r\n<p>", buf);
 
+  /* Extract the two arguments */
   p = strchr(buf, '&');
+  if (p < 0)
+  {
+    return -1;
+  }
   *p = '\0';
   strcpy(arg1, buf);
   strcpy(arg2, p + 1);

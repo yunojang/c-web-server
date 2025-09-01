@@ -26,10 +26,10 @@ int main(void)
   *p = '\0';
   strcpy(arg1, buf);
   strcpy(arg2, p + 1);
-  n1 = atoi(arg1);
-  n2 = atoi(arg2);
-  // n1 = atoi(strchr(arg1, '=') + 1);
-  // n2 = atoi(strchr(arg2, '=') + 1);
+  // n1 = atoi(arg1);
+  // n2 = atoi(arg2);
+  n1 = atoi(strchr(arg1, '=') + 1);
+  n2 = atoi(strchr(arg2, '=') + 1);
 
   /* Make the response body */
   sprintf(content + strlen(content), "Welcome to add.com: ");
@@ -37,6 +37,11 @@ int main(void)
   sprintf(content + strlen(content), "The answer is: %d + %d = %d\r\n<p>",
           n1, n2, n1 + n2);
   sprintf(content + strlen(content), "Thanks for visiting!\r\n");
+  sprintf(content + strlen(content), "<form method=\"GET\">\r\n");
+  sprintf(content + strlen(content), "<input type=\"text\" name=\"a\">\r\n");
+  sprintf(content + strlen(content), "<input type=\"text\" name=\"b\">\r\n");
+  sprintf(content + strlen(content), "<input type=\"submit\">\r\n");
+  sprintf(content + strlen(content), "</form>\r\n");
 
   /* Generate the HTTP response */
   printf("Content-type: text/html\r\n");

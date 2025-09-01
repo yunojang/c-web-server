@@ -11,9 +11,9 @@
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize, int head);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
+void serve_dynamic(int fd, char *filename, char *cgiargs, int head);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
 void response_hdrs(int fd, char *mime_type, int content_len);
@@ -58,10 +58,15 @@ void response_success_line(int fd)
   response_line(fd, "http/1.0", "200", "OK");
 }
 
-void serve_dynamic(int fd, char *filename, char *cgiargs)
+void serve_dynamic(int fd, char *filename, char *cgiargs, int only_head)
 {
   // response line
   response_success_line(fd);
+
+  if (only_head)
+  {
+    return;
+  }
 
   int pid;
   if ((pid = fork()) == 0)
@@ -87,7 +92,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
   }
 }
 
-void serve_static(int fd, char *filename, int filesize)
+void serve_static(int fd, char *filename, int filesize, int only_head)
 {
   // file open - syscall
   int srcfd = open(filename, O_RDONLY, 0);
@@ -105,7 +110,10 @@ void serve_static(int fd, char *filename, int filesize)
   response_hdrs(fd, filetype, filesize);
 
   // fd에 파일 내용 쓰기
-  rio_writen(fd, srcp, filesize);
+  if (!only_head)
+  {
+    rio_writen(fd, srcp, filesize);
+  }
 }
 
 static void append_snprintf(char *str, size_t maxlen, const char *fmt, ...)
@@ -238,12 +246,14 @@ void doit(int fd)
   char method[10] = "", uri[MAXLINE] = "", version[10] = "";
   sscanf(buf, "%s %s %s\n", method, uri, version);
   printf("browser http version: %s\n", version);
-  if (strcasecmp(method, "GET")) // case cmp 대소문자 무시 비교
+  if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD")) // case cmp 대소문자 무시 비교
   {
     clienterror(fd, "method", "501", "Not implemented", "Tiny does not implement this method");
     fprintf(stderr, "Method not allow [Only GET]: [%s]\n", method);
     return;
   }
+
+  int is_head = strcasecmp(method, "HEAD") == 0;
 
   read_requesthdrs(&rio); // 빈 라인까지 헤더 읽으나, 내용은 무시 (tiny)
 
@@ -267,8 +277,7 @@ void doit(int fd)
       // fprintf(stderr, "forbidden\n");
       return;
     }
-
-    serve_static(fd, filename, sbuf.st_size);
+    serve_static(fd, filename, sbuf.st_size, is_head);
   }
   else
   {
@@ -278,9 +287,7 @@ void doit(int fd)
       // fprintf(stderr, "forbidden\n");
       return;
     }
-
-    // dyan
-    serve_dynamic(fd, filename, cgi_args);
+    serve_dynamic(fd, filename, cgi_args, is_head);
   }
 }
 

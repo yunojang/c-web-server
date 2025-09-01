@@ -36,6 +36,14 @@ void get_filetype(char *filename, char *filetype)
   {
     strcpy(filetype, "image/jpeg");
   }
+  else if (strstr(filename, ".mpeg"))
+  {
+    strcpy(filetype, "video/mpeg");
+  }
+  else if (strstr(filename, ".mp4"))
+  {
+    strcpy(filetype, "video/mp4");
+  }
 }
 
 void response_line(int fd, char *version, char *status_code, char *short_msg)
@@ -108,40 +116,46 @@ static void append_snprintf(char *str, size_t maxlen, const char *fmt, ...)
   va_end(ap);
 }
 
-typedef struct _header
-{
-  char *title;
-  char *content;
-  struct _header *next_hdr;
-} Header;
+// typedef struct _header
+// {
+//   char *title;
+//   char *content;
+//   struct _header *next_hdr;
+// } Header;
 
-static void init_hdrs(Header *hdrs, char *title, char *content)
-{
-  hdrs->title = title;
-  hdrs->content = content;
-  hdrs->next_hdr = NULL;
-}
+// typedef struct _q
+// {
+//   void *head;
+//   void *tail;
+// } Q;
 
-static void append_hdrs(Header *hdrs, char *title, char *content)
-{
-  Header *cur_hdr = hdrs;
-  while (cur_hdr->next_hdr != NULL)
-  {
-    cur_hdr = hdrs->next_hdr;
-  }
-  init_hdrs(hdrs, title, content);
-}
+// static void append_hdrs(Q *q, char *title, char *content)
+// {
+//   Header *hdr = malloc(sizeof *hdr);
+//   hdr->title = title;
+//   hdr->content = content;
+//   hdr->next_hdr = NULL;
 
-static void make_hdrs(Header *hdrs, char *buf)
-{
-  Header *cur_hdr = hdrs;
-  while (cur_hdr != NULL)
-  {
-    append_snprintf(buf, MAXLINE, "%s: %s\r\n", cur_hdr->title, cur_hdr->content);
-    cur_hdr = hdrs->next_hdr;
-  }
-  append_snprintf(buf, MAXLINE, "\r\n"); // last of headers
-}
+//   if (q->head == NULL)
+//   {
+//     q->head = hdr;
+//     q->tail = hdr;
+//   }
+//   Header *tail = (Header *)q->tail;
+//   tail->next_hdr = hdr;
+//   tail = hdr;
+// }
+
+// static void make_hdrs(Q *q, char *buf)
+// {
+//   Header *cur_hdr = q->head;
+//   while (cur_hdr != NULL)
+//   {
+//     append_snprintf(buf, MAXLINE, "%s: %s\r\n", cur_hdr->title, cur_hdr->content);
+//     cur_hdr = cur_hdr->next_hdr;
+//   }
+//   append_snprintf(buf, MAXLINE, "\r\n"); // last of headers
+// }
 
 void itos(int n, char *buf)
 {
@@ -150,15 +164,11 @@ void itos(int n, char *buf)
 
 void response_hdrs(int fd, char *mime_type, int content_len)
 {
-  Header hdrs = {NULL, NULL, NULL};
-  append_hdrs(&hdrs, "Content-Type", mime_type);
-  char s[MAXLINE] = "";
-  itos(content_len, s);
-  append_hdrs(&hdrs, "Content-Length", s);
-  append_hdrs(&hdrs, "Connection", "close");
-
   char hdrs_buf[MAXLINE] = "";
-  make_hdrs(&hdrs, hdrs_buf);
+  append_snprintf(hdrs_buf, MAXLINE, "Content-Type:%s\r\n", mime_type);
+  append_snprintf(hdrs_buf, MAXLINE, "Content-Length: %d\r\n", content_len);
+  append_snprintf(hdrs_buf, MAXLINE, "Connection: %s\r\n", "close");
+  append_snprintf(hdrs_buf, MAXLINE, "\r\n");
   rio_writen(fd, hdrs_buf, strlen(hdrs_buf));
 }
 
@@ -225,6 +235,7 @@ void doit(int fd)
 
   char method[10] = "", uri[MAXLINE] = "", version[10] = "";
   sscanf(buf, "%s %s %s\n", method, uri, version);
+  printf("browser http version: %s\n", version);
   if (strcasecmp(method, "GET")) // case cmp 대소문자 무시 비교
   {
     clienterror(fd, "method", "501", "Not implemented", "Tiny does not implement this method");

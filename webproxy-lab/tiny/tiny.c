@@ -93,7 +93,9 @@ void serve_static(int fd, char *filename, int filesize)
   int srcfd = open(filename, O_RDONLY, 0);
 
   // file read OR mmap
-  void *srcp = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  void *srcp = malloc(filesize);
+  rio_readn(srcfd, srcp, filesize);
+  // void *srcp = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
   close(srcfd);
 
   // 응답라인, 헤더 응답하기

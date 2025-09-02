@@ -152,13 +152,11 @@ void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head)
       perror("error execve");
     }
   }
-
   int status;
   waitpid(pid, &status, 0);
   if (WIFEXITED(status))
   {
-    int code = WEXITSTATUS(status);
-    fprintf(stderr, "error code: %d\n", code); // error log
+    fprintf(stderr, "exit code: %d\n", WEXITSTATUS(status));
   }
 }
 

@@ -6,6 +6,9 @@
 
 int main(void)
 {
+  const char *head_env = getenv("IS_HEAD");
+  int is_head = strcmp(head_env, "1") == 0;
+
   char *buf, *p;
   char arg1[MAXLINE], arg2[MAXLINE], content[MAXLINE];
   int n1 = 0, n2 = 0;
@@ -47,7 +50,11 @@ int main(void)
   printf("Content-type: text/html\r\n");
   printf("Content-length: %d\r\n", (int)strlen(content));
   printf("\r\n");
-  printf("%s", content);
+
+  if (!is_head)
+  {
+    printf("%s", content);
+  }
   fflush(stdout);
 
   exit(0);

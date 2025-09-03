@@ -8,295 +8,340 @@
  */
 #include "csapp.h"
 
+enum Method
+{
+  GET,
+  HEAD,
+  // POST,
+  NOT_ALLOW,
+};
+
+enum ResourceKind
+{
+  RES_STATIC,
+  RES_CGI,
+  RES_NOTFOUND,
+  RES_FORBIDDEN,
+};
+
+typedef struct _request
+{
+  enum Method method;
+  char *uri;
+} Request;
+
+typedef struct
+{
+  enum ResourceKind kind;
+  struct stat st;
+  char *qs;
+  char *filename;
+} RouteInfo;
+
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize, int head);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
+void serve_dynamic(int fd, char *filename, char *cgiargs, int head);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
-                 char *longmsg);
+                 char *longmsg, int head);
+void response_hdrs(int fd, char *mime_type, int content_len);
 
-int main(int argc, char **argv)
+// utils
+
+static void append_snprintf(char *str, size_t maxlen, const char *fmt, ...)
 {
-  int listenfd, connfd;
-  char hostname[MAXLINE], port[MAXLINE];
-  socklen_t clientlen;
-  struct sockaddr_storage clientaddr;
+  size_t len = strlen(str);
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(str + len, maxlen, fmt, ap); // append
+  // sprintf처럼 str에 fmt를 쓴다. -> 가변인자 활용
+  va_end(ap);
+}
 
-  /* Check command line args */
-  if (argc != 2)
+// ---
+
+// response utils
+void get_filetype(char *filename, char *filetype)
+{
+  if (strstr(filename, ".html"))
   {
-    fprintf(stderr, "usage: %s <port>\n", argv[0]);
-    exit(1);
+    strcpy(filetype, "text/html");
   }
-
-  listenfd = Open_listenfd(argv[1]);
-  while (1)
+  else if (strstr(filename, ".gif"))
   {
-    clientlen = sizeof(clientaddr);
-    connfd = Accept(listenfd, (SA *)&clientaddr,
-                    &clientlen); // line:netp:tiny:accept
-    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
-                0);
-    printf("Accepted connection from (%s, %s)\n", hostname, port);
-    doit(connfd);  // line:netp:tiny:doit
-    Close(connfd); // line:netp:tiny:close
+    strcpy(filetype, "image/gif");
+  }
+  else if (strstr(filename, ".png"))
+  {
+    strcpy(filetype, "image/png");
+  }
+  else if (strstr(filename, ".jpg"))
+  {
+    strcpy(filetype, "image/jpeg");
+  }
+  else if (strstr(filename, ".mpeg"))
+  {
+    strcpy(filetype, "video/mpeg");
+  }
+  else if (strstr(filename, ".mp4"))
+  {
+    strcpy(filetype, "video/mp4");
   }
 }
 
-/*
- * doit - handle one HTTP request/response transaction
- */
-void doit(int fd)
+void response_line(int fd, char *version, char *status_code, char *short_msg)
 {
-  int is_static;
-  struct stat sbuf;
-  char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
-  char filename[MAXLINE], cgiargs[MAXLINE];
-  rio_t rio;
+  char buf[MAXBUF];
+  sprintf(buf, "%s %s %s\r\n", version, status_code, short_msg);
+  rio_writen(fd, buf, strlen(buf));
+}
 
-  /* Read request line and headers */
-  Rio_readinitb(&rio, fd);
-  if (!Rio_readlineb(&rio, buf, MAXLINE))
-    return;
-  printf("%s", buf);
-  sscanf(buf, "%s %s %s", method, uri, version);
-  if (strcasecmp(method, "GET"))
+void response_hdrs(int fd, char *mime_type, int content_len)
+{
+  char hdrs_buf[MAXLINE] = "";
+  append_snprintf(hdrs_buf, MAXLINE, "Content-Type:%s\r\n", mime_type);
+  append_snprintf(hdrs_buf, MAXLINE, "Content-Length: %d\r\n", content_len);
+  append_snprintf(hdrs_buf, MAXLINE, "Connection: %s\r\n", "close");
+  append_snprintf(hdrs_buf, MAXLINE, "\r\n");
+  rio_writen(fd, hdrs_buf, strlen(hdrs_buf));
+}
+
+void response_success_line(int fd)
+{
+  response_line(fd, "http/1.0", "200", "OK");
+}
+// ---
+
+// handlers
+void serve_static(int fd, char *filename, int filesize, int only_head)
+{
+  int srcfd = open(filename, O_RDONLY, 0);
+  void *srcp = malloc(filesize);
+  // read to memory
+  rio_readn(srcfd, srcp, filesize);
+  // map to memory
+  // void *srcp = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  close(srcfd);
+
+  response_success_line(fd); // response line
+
+  char filetype[MAXLINE];
+  get_filetype(filename, filetype);
+  response_hdrs(fd, filetype, filesize); // response hdrs
+
+  if (!only_head)
   {
-    clienterror(fd, method, "501", "Not Implemented",
-                "Tiny does not implement this method");
-    return;
-  }
-  read_requesthdrs(&rio);
-
-  /* Parse URI from GET request */
-  is_static = parse_uri(uri, filename, cgiargs);
-  if (stat(filename, &sbuf) < 0)
-  {
-    clienterror(fd, filename, "404", "Not found",
-                "Tiny couldn't find this file");
-    return;
-  }
-
-  if (is_static)
-  { /* Serve static content */
-    if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode))
-    {
-      clienterror(fd, filename, "403", "Forbidden",
-                  "Tiny couldn't read the file");
-      return;
-    }
-    serve_static(fd, filename, sbuf.st_size);
-  }
-  else
-  { /* Serve dynamic content */
-    if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode))
-    {
-      clienterror(fd, filename, "403", "Forbidden",
-                  "Tiny couldn't run the CGI program");
-      return;
-    }
-    serve_dynamic(fd, filename, cgiargs);
+    rio_writen(fd, srcp, filesize); // response content
   }
 }
 
-/*
- * read_requesthdrs - read HTTP request headers
- */
+void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head)
+{
+  response_success_line(fd); // response line
+  int pid;
+  if ((pid = fork()) == 0)
+  {
+    char *empty_args[] = {filename, NULL};
+    setenv("IS_HEAD", is_head ? "1" : "0", 1);
+    setenv("QUERY_STRING", cgiargs, 1);
+    dup2(fd, STDOUT_FILENO);
+    if (execve(filename, empty_args, environ) < 0)
+    {
+      perror("error execve");
+    }
+  }
+  int status;
+  waitpid(pid, &status, 0);
+  if (WIFEXITED(status))
+  {
+    fprintf(stderr, "exit code: %d\n", WEXITSTATUS(status));
+  }
+}
+
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg, int only_head)
+{
+  char buf[MAXLINE] = "", body[MAXBUF] = "";
+  append_snprintf(body, MAXBUF, "<html><head><title>Tiny Error</title></head>\r\n");
+  append_snprintf(body, MAXBUF, "<body bgcolor=\"ffffff\">\r\n");
+  append_snprintf(body, MAXBUF, "<p>%s:%s</p>\r\n", errnum, shortmsg);
+  append_snprintf(body, MAXBUF, "<p>%s: %s</p>\r\n", longmsg, cause);
+  append_snprintf(body, MAXBUF, "<hr><em>The Tiny Web server</em></body></html>\r\n", longmsg, cause);
+
+  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg); // version status_code status_msg
+  rio_writen(fd, buf, strlen(buf));                     // response line
+  response_hdrs(fd, "text/html", (int)strlen(body));    // response headers
+  if (!only_head)
+  {
+    rio_writen(fd, body, strlen(body)); // response body (content)
+  }
+}
+// ---
+
+// request utils
+int parse_uri(char *uri, char *filename, char *cgi_args)
+{
+  // uri -> [filename, cgiargs] & static 여부 반환
+  strcpy(cgi_args, "");
+
+  char *query_ptr;
+  if ((query_ptr = strchr(uri, '?')))
+  {
+    strcpy(cgi_args, query_ptr + 1);
+    *query_ptr = '\0'; // uri -> filename 까지
+  }
+  strcpy(filename, ".");
+  strcat(filename, uri);
+
+  if (strlen(uri) == 1 && *(uri) == '/')
+  {
+    strcpy(filename, "./home.html");
+  }
+  return !strstr(uri, "cgi-bin");
+}
+
 void read_requesthdrs(rio_t *rp)
 {
   char buf[MAXLINE];
 
-  Rio_readlineb(rp, buf, MAXLINE);
-  printf("%s", buf);
+  rio_readlineb(rp, buf, MAXLINE);
   while (strcmp(buf, "\r\n"))
   {
-    Rio_readlineb(rp, buf, MAXLINE);
-    printf("%s", buf);
+    printf("headers: %s", buf);
+    rio_readlineb(rp, buf, MAXLINE);
+  }
+  return;
+}
+// ---
+
+// choose handlers
+static void dispatch(const Request *req, RouteInfo *route, int fd)
+{
+  int is_head = req->method == HEAD;
+  if (req->method == NOT_ALLOW)
+  {
+    clienterror(fd, "method", "501", "Not implemented",
+                "Tiny does not implement this method", is_head);
+  }
+  else if (route->kind == RES_NOTFOUND)
+  {
+    clienterror(fd, route->filename, "404", "Not Found", "",
+                is_head);
+  }
+  else if (route->kind == RES_FORBIDDEN)
+  {
+    clienterror(fd, route->filename, "403", "Forbidden",
+                route->kind == RES_STATIC ? "cannot read" : "cannot run", is_head);
+  }
+  else if (route->kind == RES_STATIC)
+  {
+    serve_static(fd, route->filename, route->st.st_size, is_head);
+  }
+  else if (route->kind == RES_CGI)
+  {
+    serve_dynamic(fd, route->filename, route->qs, is_head);
   }
   return;
 }
 
-/*
- * parse_uri - parse URI into filename and CGI args
- *             return 0 if dynamic content, 1 if static
- */
-int parse_uri(char *uri, char *filename, char *cgiargs)
+// static or cgi, file chk
+static void route_request(const Request *req, RouteInfo *out)
 {
-  char *ptr;
+  char filename[MAXLINE], cgi_args[MAXLINE];
+  int is_static = parse_uri(req->uri, filename, cgi_args);
+  out->kind = is_static ? RES_STATIC : RES_CGI;
+  out->filename = filename;
+  out->qs = cgi_args;
 
-  if (!strstr(uri, "cgi-bin"))
-  { /* Static content */
-    strcpy(cgiargs, "");
-    strcpy(filename, ".");
-    strcat(filename, uri);
-    if (uri[strlen(uri) - 1] == '/')
-      strcat(filename, "home.html");
-    return 1;
-  }
-  else
-  { /* Dynamic content */
-    ptr = index(uri, '?');
-    if (ptr)
-    {
-      strcpy(cgiargs, ptr + 1);
-      *ptr = '\0';
-    }
-    else
-      strcpy(cgiargs, "");
-    strcpy(filename, ".");
-    strcat(filename, uri);
-    return 0;
-  }
-}
-
-/*
- * serve_static - copy a file back to the client
- */
-void serve_static(int fd, char *filename, int filesize)
-{
-  int srcfd;
-  char *srcp, filetype[MAXLINE];
-
-  char buf[MAXBUF];
-  char *p = buf;
-  int n;
-  int remaining = sizeof(buf);
-
-  /* Send response headers to client */
-  get_filetype(filename, filetype);
-
-  /* Build the HTTP response headers correctly - use separate buffers or append */
-  n = snprintf(p, remaining, "HTTP/1.0 200 OK\r\n");
-  p += n;
-  remaining -= n;
-
-  n = snprintf(p, remaining, "Server: Tiny Web Server\r\n");
-  p += n;
-  remaining -= n;
-
-  n = snprintf(p, remaining, "Connection: close\r\n");
-  p += n;
-  remaining -= n;
-
-  n = snprintf(p, remaining, "Content-length: %d\r\n", filesize);
-  p += n;
-  remaining -= n;
-
-  n = snprintf(p, remaining, "Content-type: %s\r\n\r\n", filetype);
-  p += n;
-  remaining -= n;
-
-  Rio_writen(fd, buf, strlen(buf));
-  printf("Response headers:\n");
-  printf("%s", buf);
-
-  /* Send response body to client */
-  srcfd = Open(filename, O_RDONLY, 0);
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
-  Close(srcfd);
-  Rio_writen(fd, srcp, filesize);
-  Munmap(srcp, filesize);
-}
-
-/*
- * get_filetype - derive file type from file name
- */
-void get_filetype(char *filename, char *filetype)
-{
-  if (strstr(filename, ".html"))
-    strcpy(filetype, "text/html");
-  else if (strstr(filename, ".gif"))
-    strcpy(filetype, "image/gif");
-  else if (strstr(filename, ".png"))
-    strcpy(filetype, "image/png");
-  else if (strstr(filename, ".jpg"))
-    strcpy(filetype, "image/jpeg");
-  else
-    strcpy(filetype, "text/plain");
-}
-
-/*
- * serve_dynamic - run a CGI program on behalf of the client
- */
-void serve_dynamic(int fd, char *filename, char *cgiargs)
-{
-  char buf[MAXLINE], *emptylist[] = {NULL};
-  pid_t pid;
-
-  /* Return first part of HTTP response */
-  sprintf(buf, "HTTP/1.0 200 OK\r\n");
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "Server: Tiny Web Server\r\n");
-  Rio_writen(fd, buf, strlen(buf));
-
-  /* Create a child process to handle the CGI program */
-  if ((pid = Fork()) < 0)
-  { /* Fork failed */
-    perror("Fork failed");
+  struct stat sbuf;
+  if (stat(filename, &sbuf) < 0)
+  {
+    out->kind = RES_NOTFOUND;
     return;
   }
+  out->st = sbuf;
 
-  if (pid == 0)
-  { /* Child process */
-    /* Real server would set all CGI vars here */
-    setenv("QUERY_STRING", cgiargs, 1);
-
-    /* Redirect stdout to client */
-    if (Dup2(fd, STDOUT_FILENO) < 0)
-    {
-      perror("Dup2 error");
-      exit(1);
-    }
-    Close(fd);
-
-    /* Run CGI program */
-    Execve(filename, emptylist, environ);
-
-    /* If we get here, Execve failed */
-    perror("Execve error");
-    exit(1);
+  if (!S_ISREG(sbuf.st_mode))
+  {
+    out->kind = RES_FORBIDDEN;
   }
-  else
-  { /* Parent process */
-    /* Parent waits for child to terminate */
-    int status;
-    if (waitpid(pid, &status, 0) < 0)
-    {
-      perror("Wait error");
-    }
-
-    printf("Child process %d terminated with status %d\n", pid, status);
-    /* Parent continues normally - returns to doit() */
+  if (is_static && !(sbuf.st_mode & S_IRUSR))
+  {
+    out->kind = RES_FORBIDDEN;
   }
-  /* When we return from here, doit() will close the connection */
+  if (!is_static && !(sbuf.st_mode & S_IXUSR))
+  {
+    out->kind = RES_FORBIDDEN;
+  }
 }
 
-/*
- * clienterror - returns an error message to the client
- */
-void clienterror(int fd, char *cause, char *errnum,
-                 char *shortmsg, char *longmsg)
+// 한개의 http 트랜잭션 처리 함수
+void doit(int fd)
 {
-  char buf[MAXLINE], body[MAXBUF];
+  char buf[MAXLINE];
+  rio_t rio;
+  rio_readinitb(&rio, fd);
+  rio_readlineb(&rio, buf, MAXLINE);
+  printf("Request headers:\n");
+  printf("%s", buf); // request line
 
-  /* Build the HTTP response body */
-  sprintf(body, "<html><title>Tiny Error</title>");
-  sprintf(body, "%s<body bgcolor="
-                "ffffff"
-                ">\r\n",
-          body);
-  sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
-  sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
-  sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
+  char method[10] = "", uri[MAXLINE] = "", version[10] = "";
+  sscanf(buf, "%s %s %s\n", method, uri, version);
+  printf("client http version: %s\n", version);
+  read_requesthdrs(&rio); // 빈 라인까지 헤더 읽으나, 내용은 무시 (tiny)
 
-  /* Print the HTTP response */
-  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "Content-type: text/html\r\n");
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
-  Rio_writen(fd, buf, strlen(buf));
-  Rio_writen(fd, body, strlen(body));
+  Request req;
+  req.uri = uri;
+  int is_get = strcasecmp(method, "GET") == 0; // case cmp 대소문자 무시 비교
+  int is_head = strcasecmp(method, "HEAD") == 0;
+  if (is_get)
+  {
+    req.method = GET;
+  }
+  else if (is_head)
+  {
+    req.method = HEAD;
+  }
+  else
+  {
+    req.method = NOT_ALLOW;
+  }
+
+  RouteInfo ri;
+  route_request(&req, &ri);
+  dispatch(&req, &ri, fd);
+}
+
+int main(int argc, char **argv)
+{
+  if (argc != 2)
+  {
+    fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+    exit(1);
+  }
+
+  char *port = argv[1];
+  int listenfd;
+  if ((listenfd = open_listenfd(port)) < 0)
+  {
+    perror("open_listenfd");
+    exit(1);
+  }
+
+  int connfd;
+  struct sockaddr_storage client_addr;
+  char host[MAXLINE], serv[MAXLINE];
+  while (1)
+  {
+    fprintf(stdout, "Wating client...\n");
+
+    socklen_t clientaddr_len = sizeof(client_addr);
+    connfd = accept(listenfd, (SA *)&client_addr, &clientaddr_len);
+    getnameinfo((SA *)&client_addr, clientaddr_len, host, MAXLINE, serv, MAXLINE, 0);
+    fprintf(stdout, "Connected (%s : %s)\n", host, serv);
+
+    doit(connfd);
+    close(connfd);
+  }
 }

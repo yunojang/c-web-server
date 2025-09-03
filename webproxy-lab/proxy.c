@@ -114,7 +114,55 @@ void read_requesthdrs(rio_t *rp, char *out)
   return;
 }
 
-int request(char *hostname, char *port, char *path, char *hdrs)
+void proxy_response(int origin_server_fd, int client_fd)
+{
+  rio_t rio_s;
+  rio_readinitb(&rio_s, origin_server_fd);
+  char buf[MAXLINE] = "";
+  size_t content_len = 0;
+
+  // 헤더 읽고 전송
+  while (rio_readlineb(&rio_s, buf, MAXLINE) != 0)
+  {
+    rio_writen(client_fd, buf, strlen(buf));
+
+    if (strstr(buf, "Content-Length:") != NULL)
+    {
+      sscanf(buf, "Content-Length: %zu", &content_len);
+    }
+
+    if (strcmp(buf, "\r\n") == 0)
+    {
+      break;
+    }
+  }
+
+  printf("response content_len: %zu\n", content_len);
+
+  if (content_len > 0)
+  {
+    char content_buf[content_len];
+    rio_readnb(&rio_s, content_buf, content_len);
+    rio_writen(client_fd, content_buf, content_len);
+  }
+}
+
+void request_hdrs(int fd, const char *req_hdrs, const char *host_name)
+{
+  char hdrs_buf[MAXBUF] = "";
+  append_snprintf(hdrs_buf, MAXBUF, "%s", req_hdrs);
+  if (strcasestr(hdrs_buf, "host") == NULL)
+  {
+    append_snprintf(hdrs_buf, MAXBUF, "Host: %s\r\n", host_name);
+  }
+  append_snprintf(hdrs_buf, MAXBUF, "User-Agent: %s", user_agent_hdr);
+  append_snprintf(hdrs_buf, MAXBUF, "Connection: close\r\n");
+  append_snprintf(hdrs_buf, MAXBUF, "Proxy-Connection: close\r\n");
+  append_snprintf(hdrs_buf, MAXBUF, "\r\n");
+  rio_writen(fd, hdrs_buf, strlen(hdrs_buf));
+}
+
+int request(int fd, char *hostname, char *port, char *path, char *hdrs)
 {
   int clientfd;
   if ((clientfd = open_clientfd(hostname, port)) < 0)
@@ -126,9 +174,9 @@ int request(char *hostname, char *port, char *path, char *hdrs)
   char buf[MAXLINE];
   sprintf(buf, "GET %s http/1.0\r\n", path);
   rio_writen(clientfd, buf, strlen(buf));
-  sprintf(buf, "%s\r\n", hdrs);
-  rio_writen(clientfd, buf, strlen(buf));
+  request_hdrs(clientfd, hdrs, hostname);
 
+  proxy_response(clientfd, fd);
   return 0;
 }
 
@@ -145,7 +193,7 @@ void request_proxy(int fd)
   if (strcasecmp(method, "GET"))
   {
     clienterror(fd, "[proxy]method", "501", "Not implement", "", 0);
-    fprintf(stderr, "invalid method [%s]", method);
+    fprintf(stderr, "invalid method [%s]\n", method);
     return;
   }
 
@@ -157,9 +205,9 @@ void request_proxy(int fd)
   char host_val[MAXLINE];
   get_hdr_val(hdrs, "Host:", host_val);
 
-  int is_static = strncmp(url, "http://", 7) == 0;
+  int is_abs = strncmp(url, "http://", 7) == 0;
   char hostname[MAXLINE], port[MAXLINE], path[MAXLINE];
-  if (is_static)
+  if (is_abs)
   {
     parse_url(url, hostname, port, path);
   }
@@ -168,7 +216,8 @@ void request_proxy(int fd)
     parse_url(host_val, hostname, port, path);
   }
   printf("Parsed: %s [%s] %s\n", hostname, port, path);
-  request(hostname, port, path, hdrs);
+  request(fd, hostname, port, path, hdrs);
+  close(fd);
 }
 
 // ---

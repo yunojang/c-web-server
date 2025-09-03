@@ -223,29 +223,26 @@ static void dispatch(const Request *req, RouteInfo *route, int fd)
   {
     clienterror(fd, "method", "501", "Not implemented",
                 "Tiny does not implement this method", is_head);
-    return;
   }
-  if (route->kind == RES_NOTFOUND)
+  else if (route->kind == RES_NOTFOUND)
   {
     clienterror(fd, route->filename, "404", "Not Found", "",
                 is_head);
-    return;
   }
-  if (route->kind == RES_FORBIDDEN)
+  else if (route->kind == RES_FORBIDDEN)
   {
     clienterror(fd, route->filename, "403", "Forbidden",
                 route->kind == RES_STATIC ? "cannot read" : "cannot run", is_head);
-    return;
   }
-
-  if (route->kind == RES_STATIC)
+  else if (route->kind == RES_STATIC)
   {
     serve_static(fd, route->filename, route->st.st_size, is_head);
   }
-  else
+  else if (route->kind == RES_CGI)
   {
     serve_dynamic(fd, route->filename, route->qs, is_head);
   }
+  return;
 }
 
 // static or cgi, file chk
@@ -291,7 +288,7 @@ void doit(int fd)
 
   char method[10] = "", uri[MAXLINE] = "", version[10] = "";
   sscanf(buf, "%s %s %s\n", method, uri, version);
-  printf("browser http version: %s\n", version);
+  printf("client http version: %s\n", version);
   read_requesthdrs(&rio); // 빈 라인까지 헤더 읽으나, 내용은 무시 (tiny)
 
   Request req;
@@ -339,8 +336,7 @@ int main(int argc, char **argv)
   {
     fprintf(stdout, "Wating client...\n");
 
-    socklen_t clientaddr_len;
-
+    socklen_t clientaddr_len = sizeof(client_addr);
     connfd = accept(listenfd, (SA *)&client_addr, &clientaddr_len);
     getnameinfo((SA *)&client_addr, clientaddr_len, host, MAXLINE, serv, MAXLINE, 0);
     fprintf(stdout, "Connected (%s : %s)\n", host, serv);

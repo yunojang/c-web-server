@@ -7,7 +7,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/webproxy-lab/tiny/tiny",
       // "program": "${workspaceFolder}/webproxy-lab/echo/client",
-      "args": ["8000"],
+      "args": ["8001"],
       // "args": ["localhost", "2233"],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}/webproxy-lab/tiny",

@@ -15,7 +15,7 @@ typedef enum
   // POST,
   // DELETE,
   NOT_ALLOW,
-} Method;
+} HttpMethod;
 
 enum ResourceKind
 {
@@ -27,8 +27,9 @@ enum ResourceKind
 
 typedef struct _request
 {
-  Method method;
+  HttpMethod method;
   char *uri;
+  char *version;
 } Request;
 
 typedef struct
@@ -182,7 +183,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 
 // request utils
 
-Method get_method(char *method)
+HttpMethod get_method(char *method)
 {
   if (strcasecmp(method, "GET") == 0)
   {
@@ -261,58 +262,64 @@ static void dispatch(const Request *req, RouteInfo *route, int fd)
 }
 
 // static or cgi, file chk
-static void route_request(const Request *req, RouteInfo *out)
+static RouteInfo route_request(const Request *req)
 {
+  RouteInfo ri;
   char filename[MAXLINE], cgi_args[MAXLINE];
   int is_static = parse_uri(req->uri, filename, cgi_args);
-  out->kind = is_static ? RES_STATIC : RES_CGI;
-  out->filename = filename;
-  out->qs = cgi_args;
+  ri.kind = is_static ? RES_STATIC : RES_CGI;
+  ri.filename = filename;
+  ri.qs = cgi_args;
 
   struct stat sbuf;
   if (stat(filename, &sbuf) < 0)
   {
-    out->kind = RES_NOTFOUND;
+    ri.kind = RES_NOTFOUND;
     return;
   }
-  out->st = sbuf;
+  ri.st = sbuf;
 
   if (!S_ISREG(sbuf.st_mode))
   {
-    out->kind = RES_FORBIDDEN;
+    ri.kind = RES_FORBIDDEN;
   }
   if (is_static && !(sbuf.st_mode & S_IRUSR))
   {
-    out->kind = RES_FORBIDDEN;
+    ri.kind = RES_FORBIDDEN;
   }
   if (!is_static && !(sbuf.st_mode & S_IXUSR))
   {
-    out->kind = RES_FORBIDDEN;
+    ri.kind = RES_FORBIDDEN;
   }
+  return ri;
+}
+
+Request parse_request(char *buf)
+{
+  Request req;
+  char method[10] = "", uri[MAXLINE] = "", version[10] = "";
+  sscanf(buf, "%s %s %s\n", method, uri, version);
+
+  req.uri = uri;
+  req.version = version;
+  req.method = get_method(method);
+
+  return req;
 }
 
 // 한개의 http 트랜잭션 처리 함수
 void doit(int fd)
 {
-  char buf[MAXLINE];
   rio_t rio;
   rio_readinitb(&rio, fd);
-  rio_readlineb(&rio, buf, MAXLINE);
-  printf("Request headers:\n");
-  printf("%s", buf); // request line
 
-  char method[10] = "", uri[MAXLINE] = "", version[10] = "";
-  sscanf(buf, "%s %s %s\n", method, uri, version);
-  printf("client http version: %s\n", version);
-  read_requesthdrs(&rio); // 빈 라인까지 헤더 읽으나, 내용은 무시 (tiny)
+  char buf[MAXLINE];
+  rio_readlineb(&rio, buf, MAXLINE); // read request line
+  read_requesthdrs(&rio);            // read request hdrs (tiny: 내용은 무시)
 
-  Request req;
-  RouteInfo ri;
-
-  req.uri = uri;
-  req.method = get_method(method);
-  route_request(&req, &ri);
-  dispatch(&req, &ri, fd);
+  Request req = parse_request(buf);
+  RouteInfo routeinfo = route_request(&req);
+  dispatch(&req, &routeinfo, fd);
 }
 
 int main(int argc, char **argv)

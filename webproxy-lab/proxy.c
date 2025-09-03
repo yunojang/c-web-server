@@ -10,6 +10,8 @@ static const char *user_agent_hdr =
     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
     "Firefox/10.0.3\r\n";
 
+void *thread(void *args);
+
 // utils
 static void append_snprintf(char *str, size_t maxlen, const char *fmt, ...)
 {
@@ -172,7 +174,7 @@ int request(int fd, char *hostname, char *port, char *path, char *hdrs)
   }
 
   char buf[MAXLINE];
-  sprintf(buf, "GET %s http/1.0\r\n", path);
+  sprintf(buf, "GET %s HTTP/1.0\r\n", path);
   rio_writen(clientfd, buf, strlen(buf));
   request_hdrs(clientfd, hdrs, hostname);
 
@@ -213,7 +215,9 @@ void request_proxy(int fd)
   }
   else
   {
-    parse_url(host_val, hostname, port, path);
+    char new_url[MAXLINE];
+    snprintf(new_url, MAXLINE, "%s%s", host_val, url);
+    parse_url(new_url, hostname, port, path);
   }
   printf("Parsed: %s [%s] %s\n", hostname, port, path);
   request(fd, hostname, port, path, hdrs);
@@ -238,19 +242,31 @@ int main(int argc, char **argv)
     exit(1);
   }
 
-  int connfd;
+  int *connfd;
   struct sockaddr_storage client_addr;
   char host[MAXLINE] = "", serv[MAXLINE] = "";
+  pthread_t tid;
   while (1)
   {
     printf("Wating...\n");
     socklen_t addr_len = sizeof(client_addr);
-    connfd = accept(listenfd, (SA *)&client_addr, &addr_len);
+    connfd = malloc(sizeof(int));
+    *connfd = accept(listenfd, (SA *)&client_addr, &addr_len);
     getnameinfo((SA *)&client_addr, addr_len, host, MAXLINE, serv, MAXLINE, 0);
     printf("Connected (%s : %s)\n", host, serv);
-    request_proxy(connfd);
-    close(connfd);
+    pthread_create(&tid, NULL, thread, connfd);
   }
 
   return 0;
+}
+
+// thread routine
+void *thread(void *vargp)
+{
+  int connfd = *((int *)vargp);
+  free(vargp);
+  pthread_detach(pthread_self());
+  request_proxy(connfd);
+  close(connfd);
+  return NULL;
 }

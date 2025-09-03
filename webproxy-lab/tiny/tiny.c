@@ -8,13 +8,14 @@
  */
 #include "csapp.h"
 
-enum Method
+typedef enum
 {
   GET,
   HEAD,
   // POST,
+  // DELETE,
   NOT_ALLOW,
-};
+} Method;
 
 enum ResourceKind
 {
@@ -26,7 +27,7 @@ enum ResourceKind
 
 typedef struct _request
 {
-  enum Method method;
+  Method method;
   char *uri;
 } Request;
 
@@ -180,6 +181,20 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 // ---
 
 // request utils
+
+Method get_method(char *method)
+{
+  if (strcasecmp(method, "GET") == 0)
+  {
+    return GET;
+  }
+  if (strcasecmp(method, "HEAD") == 0)
+  {
+    return HEAD;
+  }
+  return NOT_ALLOW;
+}
+
 int parse_uri(char *uri, char *filename, char *cgi_args)
 {
   // uri -> [filename, cgiargs] & static 여부 반환
@@ -292,23 +307,10 @@ void doit(int fd)
   read_requesthdrs(&rio); // 빈 라인까지 헤더 읽으나, 내용은 무시 (tiny)
 
   Request req;
-  req.uri = uri;
-  int is_get = strcasecmp(method, "GET") == 0; // case cmp 대소문자 무시 비교
-  int is_head = strcasecmp(method, "HEAD") == 0;
-  if (is_get)
-  {
-    req.method = GET;
-  }
-  else if (is_head)
-  {
-    req.method = HEAD;
-  }
-  else
-  {
-    req.method = NOT_ALLOW;
-  }
-
   RouteInfo ri;
+
+  req.uri = uri;
+  req.method = get_method(method);
   route_request(&req, &ri);
   dispatch(&req, &ri, fd);
 }
